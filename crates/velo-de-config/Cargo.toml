@@ -1,0 +1,12 @@
+[package]
+name = "velo-de-config"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+velo-de-core = { path = "../velo-de-core" }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+dirs = "5"
+xkbcommon = "0.8"

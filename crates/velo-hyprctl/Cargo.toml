@@ -1,0 +1,13 @@
+[package]
+name = "velo-hyprctl"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "hyprctl"
+path = "src/main.rs"
+
+[dependencies]
+velo-de-ipc = { path = "../velo-de-ipc" }
+serde_json = "1"
