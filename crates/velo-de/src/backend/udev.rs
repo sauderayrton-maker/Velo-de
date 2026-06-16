@@ -209,6 +209,9 @@ pub fn run(display: Display<State>, config: Config, output: Output) -> Result<()
                 pointer.motion(&mut data.state, focus, &MotionEvent { location: loc, serial: SERIAL_COUNTER.next_serial(), time: event.time_msec() });
                 pointer.frame(&mut data.state);
             }
+            // Refresh keyboard focus to the focused grid window on mouse move,
+            // mirroring winit.rs's PointerMotionAbsolute behavior.
+            refresh_keyboard_focus(&mut data.state);
         }
         InputEvent::PointerButton { event } => {
             if let Some(pointer) = data.state.seat.get_pointer() {
@@ -244,6 +247,7 @@ pub fn run(display: Display<State>, config: Config, output: Output) -> Result<()
         data.last_frame = now;
         data.state.tick(dt);
         data.state.process_ipc();
+        refresh_keyboard_focus(&mut data.state);
 
         if let Ok(Some(stream)) = data.listener.accept() {
             let _ = data.display_handle.insert_client(stream, Arc::new(ClientState::default()));
@@ -265,11 +269,22 @@ fn focused_surface(state: &State) -> Option<smithay::reexports::wayland_server::
     state.toplevel_for(id).map(|s| s.wl_surface().clone())
 }
 
+/// Point keyboard focus at the grid's current focused window. Called
+/// periodically so typing always reaches the right client even if the
+/// compositor hasn't received a pointer event recently. smithay skips
+/// sending enter/leave when the focus hasn't changed.
+fn refresh_keyboard_focus(state: &mut State) {
+    let surface = focused_surface(state);
+    if let Some(keyboard) = state.seat.get_keyboard() {
+        keyboard.set_focus(state, surface, SERIAL_COUNTER.next_serial());
+    }
+}
+
 /// Render one frame into the next GBM buffer and queue it for scanout.
 fn render(data: &mut CalloopData) -> Result<(), Box<dyn std::error::Error>> {
     let (mut dmabuf, _age) = data.udev.gbm_surface.next_buffer()?;
     let mut framebuffer = data.udev.renderer.bind(&mut dmabuf)?;
-    render_frame(&mut data.state, &mut data.udev.renderer, &mut framebuffer, data.udev.output_size)?;
+    render_frame(&mut data.state, &mut data.udev.renderer, &mut framebuffer, data.udev.output_size, smithay::utils::Transform::Normal)?;
 
     let time = data.state.start_time.elapsed().as_millis() as u32;
     for (_, surface) in data.state.windows() {

@@ -98,7 +98,7 @@ pub fn run(display: Display<State>, config: Config, output: Output) -> Result<()
         let size = backend.window_size();
         {
             let (renderer, mut framebuffer) = backend.bind()?;
-            render_frame(&mut state, renderer, &mut framebuffer, size)?;
+            render_frame(&mut state, renderer, &mut framebuffer, size, smithay::utils::Transform::Flipped180)?;
         }
 
         let time = state.start_time.elapsed().as_millis() as u32;

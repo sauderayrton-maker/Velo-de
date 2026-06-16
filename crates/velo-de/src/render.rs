@@ -23,6 +23,7 @@ pub fn render_frame(
     renderer: &mut GlesRenderer,
     framebuffer: &mut <GlesRenderer as RendererSuper>::Framebuffer<'_>,
     output_size: SmithaySize<i32, Physical>,
+    transform: Transform,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let theme = state.config.theme.clone();
     let viewport = state.grid.viewport();
@@ -90,7 +91,7 @@ pub fn render_frame(
         }
     }
 
-    let mut gpu_frame = renderer.render(framebuffer, output_size, Transform::Flipped180)?;
+    let mut gpu_frame = renderer.render(framebuffer, output_size, transform)?;
     gpu_frame.clear(Color32F::from(theme.background.to_array()), &damage)?;
 
     for (tile, is_selection) in &tiles {
