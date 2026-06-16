@@ -1,15 +1,18 @@
 //! Turns the live [`Grid`](velo_de_core::Grid) into GLES render elements:
 //! the Velo background, Overview tile backgrounds with an accent selection
 //! halo, an accent border around the focused window, `wlr_layer_shell`
-//! surfaces (e.g. a Velo-shell top bar or Velo Launcher), and every visible
-//! mapped surface placed via [`velo_de_core::place_window`].
+//! surfaces (e.g. a Velo-shell top bar or Velo Launcher), every visible
+//! mapped surface placed via [`velo_de_core::place_window`], and a software
+//! mouse cursor.
 
 use smithay::backend::renderer::element::surface::{render_elements_from_surface_tree, WaylandSurfaceRenderElement};
 use smithay::backend::renderer::element::Kind;
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::backend::renderer::utils::draw_render_elements;
 use smithay::backend::renderer::{Color32F, Frame, Renderer, RendererSuper};
+use smithay::input::pointer::{CursorImageStatus, CursorImageSurfaceData};
 use smithay::utils::{Logical, Physical, Point, Rectangle, Scale, Size as SmithaySize, Transform};
+use smithay::wayland::compositor::with_states;
 use smithay::wayland::shell::wlr_layer::{Layer, LayerSurface};
 
 use velo_de_core::place_window;
@@ -91,6 +94,34 @@ pub fn render_frame(
         }
     }
 
+    // Collect cursor surface elements now, while renderer is not yet borrowed
+    // by gpu_frame. render_elements_from_surface_tree needs &mut renderer; once
+    // gpu_frame exists that borrow is held and we can't call it again.
+    let cursor_pos = state.cursor_pos;
+    let cursor_status = state.cursor_status.clone();
+    let mut cursor_elements: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = Vec::new();
+    if let CursorImageStatus::Surface(ref cursor_surface) = cursor_status {
+        let hotspot = with_states(cursor_surface, |states| {
+            states
+                .data_map
+                .get::<CursorImageSurfaceData>()
+                .map(|d| d.lock().unwrap().hotspot)
+                .unwrap_or_default()
+        });
+        let loc = Point::<i32, Physical>::from((
+            cursor_pos.x as i32 - hotspot.x,
+            cursor_pos.y as i32 - hotspot.y,
+        ));
+        cursor_elements.extend(render_elements_from_surface_tree::<_, WaylandSurfaceRenderElement<GlesRenderer>>(
+            renderer,
+            cursor_surface,
+            loc,
+            Scale::from(1.0),
+            1.0,
+            Kind::Unspecified,
+        ));
+    }
+
     let mut gpu_frame = renderer.render(framebuffer, output_size, transform)?;
     gpu_frame.clear(Color32F::from(theme.background.to_array()), &damage)?;
 
@@ -109,6 +140,19 @@ pub fn render_frame(
         gpu_frame.draw_solid(rect, &damage, Color32F::from(theme.accent.to_array()))?;
     }
     draw_render_elements(&mut gpu_frame, 1.0, &elements, &damage)?;
+
+    // Draw the software cursor on top of everything else.
+    if !cursor_elements.is_empty() {
+        draw_render_elements(&mut gpu_frame, 1.0, &cursor_elements, &damage)?;
+    } else if !matches!(cursor_status, CursorImageStatus::Hidden) {
+        // Fallback: small accent-colored square when no client cursor surface.
+        let cursor_rect = Rectangle::new(
+            Point::from((cursor_pos.x as i32 - 5, cursor_pos.y as i32 - 5)),
+            SmithaySize::from((10, 10)),
+        );
+        gpu_frame.draw_solid(cursor_rect, &damage, Color32F::from(theme.accent.to_array()))?;
+    }
+
     let _ = gpu_frame.finish()?;
 
     Ok(())

@@ -27,6 +27,10 @@ pub struct Config {
     /// Action triggered by tapping `Super` alone (no other key).
     pub super_tap_action: Action,
     pub keybinds: Vec<Keybind>,
+    /// Milliseconds before key repeat begins (sent to clients via `wl_keyboard`).
+    pub key_repeat_delay_ms: u32,
+    /// Key repeats per second (sent to clients via `wl_keyboard`).
+    pub key_repeat_rate: u32,
 }
 
 impl Default for Config {
@@ -38,6 +42,8 @@ impl Default for Config {
             autostart: vec!["velo-shell".into()],
             super_tap_action: Action::ToggleOverview,
             keybinds: default_keybinds(),
+            key_repeat_delay_ms: 200,
+            key_repeat_rate: 40,
         }
     }
 }
@@ -66,6 +72,15 @@ pub fn default_keybinds() -> Vec<Keybind> {
         Keybind::new("Super+Q", Action::CloseWindow),
         Keybind::new("Super+Equal", Action::ResizeColumn(1.1)),
         Keybind::new("Super+Minus", Action::ResizeColumn(1.0 / 1.1)),
+        Keybind::new("Super+1", Action::FocusSpace(1)),
+        Keybind::new("Super+2", Action::FocusSpace(2)),
+        Keybind::new("Super+3", Action::FocusSpace(3)),
+        Keybind::new("Super+4", Action::FocusSpace(4)),
+        Keybind::new("Super+5", Action::FocusSpace(5)),
+        Keybind::new("Super+6", Action::FocusSpace(6)),
+        Keybind::new("Super+7", Action::FocusSpace(7)),
+        Keybind::new("Super+8", Action::FocusSpace(8)),
+        Keybind::new("Super+9", Action::FocusSpace(9)),
     ]
 }
 

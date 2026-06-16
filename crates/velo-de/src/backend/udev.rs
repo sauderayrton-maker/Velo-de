@@ -203,14 +203,13 @@ pub fn run(display: Display<State>, config: Config, output: Output) -> Result<()
             loc.x = loc.x.clamp(0.0, data.udev.output_size.w as f64);
             loc.y = loc.y.clamp(0.0, data.udev.output_size.h as f64);
             data.udev.pointer_location = loc;
+            data.state.cursor_pos = loc;
 
             if let Some(pointer) = data.state.seat.get_pointer() {
                 let focus = focused_surface(&data.state).map(|surface| (surface, Point::from((0.0, 0.0))));
                 pointer.motion(&mut data.state, focus, &MotionEvent { location: loc, serial: SERIAL_COUNTER.next_serial(), time: event.time_msec() });
                 pointer.frame(&mut data.state);
             }
-            // Refresh keyboard focus to the focused grid window on mouse move,
-            // mirroring winit.rs's PointerMotionAbsolute behavior.
             refresh_keyboard_focus(&mut data.state);
         }
         InputEvent::PointerButton { event } => {

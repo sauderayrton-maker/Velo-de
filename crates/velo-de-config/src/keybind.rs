@@ -118,6 +118,8 @@ pub enum Action {
     OverviewMove(Dir),
     OverviewConfirm,
     OverviewCancel,
+    /// Jump directly to the Space with this stable numeric id (1-based).
+    FocusSpace(i32),
     /// Run a shell command (e.g. to launch Velo-Browser/Files/Player).
     Spawn(String),
     /// Run [`Config::terminal`](crate::Config::terminal).
@@ -144,6 +146,7 @@ impl Action {
             Action::OverviewMove(dir) => Command::OverviewMove((*dir).into()),
             Action::OverviewConfirm => Command::OverviewConfirm,
             Action::OverviewCancel => Command::OverviewCancel,
+            Action::FocusSpace(id) => Command::FocusSpaceById(*id),
             Action::Spawn(_) | Action::SpawnTerminal | Action::Quit => return None,
         })
     }

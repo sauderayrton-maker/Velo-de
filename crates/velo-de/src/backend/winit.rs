@@ -5,13 +5,14 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use smithay::backend::input::{Event as _, InputEvent, KeyboardKeyEvent};
+use smithay::backend::input::{AbsolutePositionEvent, Event as _, InputEvent, KeyboardKeyEvent};
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::backend::winit::{self, WinitEvent};
+use smithay::input::pointer::MotionEvent;
 use smithay::output::{Mode, Output, Scale as OutputScale};
 use smithay::reexports::wayland_server::{Display, ListeningSocket};
 use smithay::reexports::winit::platform::pump_events::PumpStatus;
-use smithay::utils::{Rectangle, Serial, Transform};
+use smithay::utils::{Point, Rectangle, Transform, SERIAL_COUNTER};
 
 use velo_de_config::{Action, Config};
 use velo_de_core::Size;
@@ -64,14 +65,33 @@ pub fn run(display: Display<State>, config: Config, output: Output) -> Result<()
             WinitEvent::Input(InputEvent::Keyboard { event }) => {
                 pending_action = handle_keyboard(&mut state, &keymap, event.key_code(), event.state(), event.time_msec());
             }
-            WinitEvent::Input(InputEvent::PointerMotionAbsolute { .. }) => {
-                if let Some(id) = state.grid.focused_window() {
-                    if let Some(surface) = state.toplevel_for(id) {
-                        let surface = surface.wl_surface().clone();
-                        if let Some(keyboard) = state.seat.get_keyboard() {
-                            keyboard.set_focus(&mut state, Some(surface), Serial::from(0));
-                        }
-                    }
+            WinitEvent::Input(InputEvent::PointerMotionAbsolute { event }) => {
+                let output_size = state
+                    .output
+                    .current_mode()
+                    .map(|m| m.size)
+                    .unwrap_or_default();
+                let x = event.x_transformed(output_size.w);
+                let y = event.y_transformed(output_size.h);
+                let location = Point::from((x, y));
+                state.cursor_pos = location;
+
+                let focus = state
+                    .grid
+                    .focused_window()
+                    .and_then(|id| state.toplevel_for(id))
+                    .map(|s| (s.wl_surface().clone(), Point::from((0.0_f64, 0.0_f64))));
+                if let Some(pointer) = state.seat.get_pointer() {
+                    pointer.motion(
+                        &mut state,
+                        focus,
+                        &MotionEvent {
+                            location,
+                            serial: SERIAL_COUNTER.next_serial(),
+                            time: event.time_msec(),
+                        },
+                    );
+                    pointer.frame(&mut state);
                 }
             }
             _ => {}

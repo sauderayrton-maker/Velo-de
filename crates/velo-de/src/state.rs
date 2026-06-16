@@ -18,7 +18,7 @@ use smithay::reexports::wayland_server::protocol::wl_output::WlOutput;
 use smithay::reexports::wayland_server::protocol::wl_seat;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::{Client, DisplayHandle, Resource};
-use smithay::utils::{Logical, Rectangle, Serial, Size as SmithaySize};
+use smithay::utils::{Logical, Point, Rectangle, Serial, Size as SmithaySize};
 use smithay::backend::renderer::utils::on_commit_buffer_handler;
 use smithay::wayland::buffer::BufferHandler;
 use smithay::wayland::compositor::{with_states, CompositorClientState, CompositorHandler, CompositorState};
@@ -112,6 +112,13 @@ pub struct State {
     /// later commit that fills in a title/app-id set after the toplevel was
     /// first mapped (and focused with an empty title) triggers a refresh.
     last_active_window: Option<WindowInfo>,
+
+    /// Current pointer position in logical output coordinates, updated by
+    /// the active backend on every pointer motion event.
+    pub cursor_pos: Point<f64, Logical>,
+    /// The cursor image currently set by the focused client (or the default
+    /// arrow cursor when no client has called `wl_pointer.set_cursor`).
+    pub cursor_status: CursorImageStatus,
 }
 
 impl State {
@@ -125,7 +132,7 @@ impl State {
         let layer_shell_state = WlrLayerShellState::new::<Self>(&display_handle);
 
         let mut seat = seat_state.new_wl_seat(&display_handle, "velo-de");
-        let _ = seat.add_keyboard(Default::default(), 200, 25);
+        let _ = seat.add_keyboard(Default::default(), config.key_repeat_delay_ms as i32, config.key_repeat_rate as i32);
         let _ = seat.add_pointer();
 
         let gap = config.gap;
@@ -164,6 +171,9 @@ impl State {
             hypr_new_clients: ipc.hypr_clients,
             hypr_clients: Vec::new(),
             last_active_window: None,
+
+            cursor_pos: Point::from((0.0, 0.0)),
+            cursor_status: CursorImageStatus::default_named(),
         };
         state.arrange_layers();
         state
@@ -508,7 +518,9 @@ impl SeatHandler for State {
     }
 
     fn focus_changed(&mut self, _seat: &Seat<Self>, _focused: Option<&WlSurface>) {}
-    fn cursor_image(&mut self, _seat: &Seat<Self>, _image: CursorImageStatus) {}
+    fn cursor_image(&mut self, _seat: &Seat<Self>, image: CursorImageStatus) {
+        self.cursor_status = image;
+    }
 }
 
 impl SelectionHandler for State {
