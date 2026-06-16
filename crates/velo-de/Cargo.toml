@@ -12,6 +12,17 @@ path = "src/main.rs"
 velo-de-core = { path = "../velo-de-core" }
 velo-de-config = { path = "../velo-de-config" }
 velo-de-ipc = { path = "../velo-de-ipc" }
-smithay = { version = "0.7.0", default-features = false, features = ["backend_winit", "wayland_frontend"] }
+smithay = { version = "0.7.0", default-features = false, features = [
+    "backend_winit",
+    "backend_udev",
+    "backend_drm",
+    "backend_gbm",
+    "backend_egl",
+    "backend_libinput",
+    "backend_session",
+    "backend_session_libseat",
+    "renderer_gl",
+    "wayland_frontend",
+] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

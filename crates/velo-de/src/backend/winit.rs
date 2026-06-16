@@ -5,54 +5,24 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use smithay::backend::input::{Event as _, InputEvent, KeyState, KeyboardKeyEvent};
+use smithay::backend::input::{Event as _, InputEvent, KeyboardKeyEvent};
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::backend::winit::{self, WinitEvent};
-use smithay::input::keyboard::FilterResult;
 use smithay::output::{Mode, Output, Scale as OutputScale};
 use smithay::reexports::wayland_server::{Display, ListeningSocket};
 use smithay::reexports::winit::platform::pump_events::PumpStatus;
 use smithay::utils::{Rectangle, Serial, Transform};
-use smithay::wayland::compositor::{with_surface_tree_downward, SurfaceAttributes, TraversalAction};
 
-use velo_de_config::{to_lower_keysym, Action, Config, KeyCombo, Modifiers};
+use velo_de_config::{Action, Config};
 use velo_de_core::Size;
 
+use crate::backend::input::{build_keymap, handle_keyboard};
+use crate::backend::{prepare_child_env, send_frame_callbacks};
 use crate::ipc;
 use crate::render::render_frame;
 use crate::state::{spawn_shell, ClientState, State};
 
 const SOCKET_NAME: &str = "wayland-velo-de";
-
-/// Prepare the environment inherited by spawned children (`velo-shell`,
-/// `velo-launcher`, and Velo-Browser/Files/Player):
-///
-/// - Set `HYPRLAND_INSTANCE_SIGNATURE` and prepend the directory containing
-///   the `hyprctl` shim (built by `velo-hyprctl`, alongside this binary) to
-///   `PATH`, so `velo-shell` resolves `hyprctl` to the shim and
-///   `Velo-shell/src/hypr.rs::event_socket_path()` to our compat socket.
-/// - Default `GSK_RENDERER=gl`: GTK4's default (Vulkan/NGL) renderer fails
-///   with `VK_ERROR_SURFACE_LOST_KHR` under `velo-de`, which doesn't yet
-///   advertise `zwp_linux_dmabuf_v1`. Left alone if already set.
-fn prepare_child_env() {
-    std::env::set_var("HYPRLAND_INSTANCE_SIGNATURE", velo_de_ipc::HYPRLAND_INSTANCE_SIGNATURE);
-
-    if std::env::var_os("GSK_RENDERER").is_none() {
-        std::env::set_var("GSK_RENDERER", "gl");
-    }
-
-    let Ok(exe) = std::env::current_exe() else { return };
-    let Some(dir) = exe.parent() else { return };
-    if !dir.join("hyprctl").is_file() {
-        return;
-    }
-
-    let path = std::env::var_os("PATH").unwrap_or_default();
-    let dirs = std::iter::once(dir.to_path_buf()).chain(std::env::split_paths(&path));
-    if let Ok(new_path) = std::env::join_paths(dirs) {
-        std::env::set_var("PATH", new_path);
-    }
-}
 
 pub fn run(display: Display<State>, config: Config, output: Output) -> Result<(), Box<dyn std::error::Error>> {
     let mut display = display;
@@ -79,8 +49,7 @@ pub fn run(display: Display<State>, config: Config, output: Output) -> Result<()
         spawn_shell(&cmd);
     }
 
-    let keymap: Vec<(KeyCombo, Action)> =
-        state.config.keybinds.iter().filter_map(|kb| kb.combo().ok().map(|combo| (combo, kb.action.clone()))).collect();
+    let keymap = build_keymap(&state);
 
     let mut last_frame = Instant::now();
 
@@ -93,29 +62,7 @@ pub fn run(display: Display<State>, config: Config, output: Output) -> Result<()
                 state.arrange_layers();
             }
             WinitEvent::Input(InputEvent::Keyboard { event }) => {
-                let Some(keyboard) = state.seat.get_keyboard() else { return };
-                let key_state = event.state();
-                let action = keyboard.input::<Action, _>(
-                    &mut state,
-                    event.key_code(),
-                    key_state,
-                    Serial::from(0),
-                    event.time_msec(),
-                    |_, mods, keysym| {
-                        if key_state != KeyState::Pressed {
-                            return FilterResult::Forward;
-                        }
-                        let combo = KeyCombo {
-                            modifiers: Modifiers { logo: mods.logo, shift: mods.shift, ctrl: mods.ctrl, alt: mods.alt },
-                            keysym: to_lower_keysym(keysym.modified_sym()),
-                        };
-                        match keymap.iter().find(|(c, _)| *c == combo) {
-                            Some((_, action)) => FilterResult::Intercept(action.clone()),
-                            None => FilterResult::Forward,
-                        }
-                    },
-                );
-                pending_action = action;
+                pending_action = handle_keyboard(&mut state, &keymap, event.key_code(), event.state(), event.time_msec());
             }
             WinitEvent::Input(InputEvent::PointerMotionAbsolute { .. }) => {
                 if let Some(id) = state.grid.focused_window() {
@@ -167,18 +114,4 @@ pub fn run(display: Display<State>, config: Config, output: Output) -> Result<()
     }
 
     Ok(())
-}
-
-fn send_frame_callbacks(surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface, time: u32) {
-    with_surface_tree_downward(
-        surface,
-        (),
-        |_, _, &()| TraversalAction::DoChildren(()),
-        |_, states, &()| {
-            for callback in states.cached_state.get::<SurfaceAttributes>().current().frame_callbacks.drain(..) {
-                callback.done(time);
-            }
-        },
-        |_, _, &()| true,
-    );
 }

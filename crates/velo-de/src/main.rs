@@ -32,5 +32,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
     );
 
-    backend::winit::run(display, config, output)
+    // SDDM (and other login managers) launch sessions with no
+    // `WAYLAND_DISPLAY`/`DISPLAY` set; an existing graphical session sets
+    // one or both. Mirrors how Hyprland/Sway pick a nested-vs-standalone
+    // backend.
+    let nested = std::env::var_os("WAYLAND_DISPLAY").is_some() || std::env::var_os("DISPLAY").is_some();
+    if nested {
+        tracing::info!("WAYLAND_DISPLAY/DISPLAY set; running nested winit backend");
+        backend::winit::run(display, config, output)
+    } else {
+        tracing::info!("no parent Wayland/X11 session detected; running standalone udev backend");
+        backend::udev::run(display, config, output)
+    }
 }
