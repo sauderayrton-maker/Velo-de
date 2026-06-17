@@ -345,6 +345,10 @@ impl Grid {
         self.spaces.iter().filter_map(|(coord, space)| self.id_by_coord.get(coord).map(|&id| (id, space.window_count()))).collect()
     }
 
+    pub fn space_coords(&self) -> impl Iterator<Item = (i32, i32)> + '_ {
+        self.spaces.keys().copied()
+    }
+
     pub fn is_settled(&self) -> bool {
         self.pan.is_settled() && self.overview.zoom.is_settled() && self.spaces.get(&self.current).is_none_or(|s| s.strip.scroll.is_settled())
     }
@@ -526,7 +530,6 @@ impl Grid {
 
         let (dc, dr) = dir.delta();
         let target_coord = (self.current.0 + dc, self.current.1 + dr);
-        let is_new = !self.spaces.contains_key(&target_coord);
         self.ensure_space(target_coord);
 
         let target = self.spaces.get_mut(&target_coord).expect("just ensured");
@@ -540,9 +543,6 @@ impl Grid {
         self.go_to_space(target_coord);
 
         let mut events = vec![Event::SpacesChanged, Event::SpaceChanged(self.current_space_id())];
-        if is_new {
-            events.push(Event::SpacesChanged);
-        }
         events.push(Event::FocusChanged(self.focused_window()));
         events
     }
@@ -582,7 +582,6 @@ impl Grid {
 
         let (dc, dr) = dir.delta();
         let target_coord = (self.current.0 + dc, self.current.1 + dr);
-        let is_new = !self.spaces.contains_key(&target_coord);
         self.ensure_space(target_coord);
 
         let target = self.spaces.get_mut(&target_coord).expect("just ensured");
@@ -594,9 +593,6 @@ impl Grid {
         self.go_to_space(target_coord);
 
         let mut events = vec![Event::SpacesChanged, Event::SpaceChanged(self.current_space_id())];
-        if is_new {
-            events.push(Event::SpacesChanged);
-        }
         events.push(Event::FocusChanged(self.focused_window()));
         events
     }

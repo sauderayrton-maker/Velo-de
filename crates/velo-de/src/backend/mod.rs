@@ -23,6 +23,8 @@ use smithay::wayland::compositor::{with_surface_tree_downward, SurfaceAttributes
 ///   advertise `zwp_linux_dmabuf_v1`. Left alone if already set.
 pub(crate) fn prepare_child_env() {
     std::env::set_var("HYPRLAND_INSTANCE_SIGNATURE", velo_de_ipc::HYPRLAND_INSTANCE_SIGNATURE);
+    std::env::set_var("XDG_CURRENT_DESKTOP", "velo-de");
+    std::env::set_var("XDG_SESSION_TYPE", "wayland");
 
     if std::env::var_os("GSK_RENDERER").is_none() {
         std::env::set_var("GSK_RENDERER", "gl");

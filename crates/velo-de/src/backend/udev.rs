@@ -289,6 +289,9 @@ fn render(data: &mut CalloopData) -> Result<(), Box<dyn std::error::Error>> {
     for (_, surface) in data.state.windows() {
         send_frame_callbacks(surface.wl_surface(), time);
     }
+    for (surface, _, _) in data.state.layer_entries() {
+        send_frame_callbacks(surface.wl_surface(), time);
+    }
 
     let damage = Rectangle::from_size(data.udev.output_size);
     data.udev.gbm_surface.queue_buffer(None, Some(vec![damage]), ())?;

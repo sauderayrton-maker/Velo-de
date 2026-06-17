@@ -125,6 +125,9 @@ pub fn run(display: Display<State>, config: Config, output: Output) -> Result<()
         for (_, surface) in state.windows() {
             send_frame_callbacks(surface.wl_surface(), time);
         }
+        for (surface, _, _) in state.layer_entries() {
+            send_frame_callbacks(surface.wl_surface(), time);
+        }
 
         let damage = Rectangle::from_size(size);
         backend.submit(Some(&[damage]))?;

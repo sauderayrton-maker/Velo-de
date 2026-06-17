@@ -18,7 +18,7 @@ use smithay::reexports::wayland_server::protocol::wl_output::WlOutput;
 use smithay::reexports::wayland_server::protocol::wl_seat;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::{Client, DisplayHandle, Resource};
-use smithay::utils::{Logical, Point, Rectangle, Serial, Size as SmithaySize};
+use smithay::utils::{Logical, Point, Rectangle, Serial, Size as SmithaySize, SERIAL_COUNTER};
 use smithay::backend::renderer::utils::on_commit_buffer_handler;
 use smithay::wayland::buffer::BufferHandler;
 use smithay::wayland::compositor::{with_states, CompositorClientState, CompositorHandler, CompositorState};
@@ -262,24 +262,31 @@ impl State {
         }
     }
 
-    /// Tell the output's mapped windows their current-Space target size,
-    /// sending an `xdg_toplevel` configure only when the size actually
-    /// changed (positions are re-derived every frame in `render`, without a
-    /// round-trip to the client).
+    /// Tell all mapped windows their target size, sending an `xdg_toplevel`
+    /// configure only when the size actually changed. Covers every Space so
+    /// that a screen resize propagates to background spaces immediately, not
+    /// only when the user visits them.
     pub fn sync_layout(&mut self) {
         let viewport = self.grid.viewport();
         let gap = self.grid.gap();
-        for layout in self.grid.current_space().layout(viewport, gap) {
-            let Some(surface) = self.windows.get(&layout.id) else { continue };
-            let size = (layout.rect.w.round() as i32, layout.rect.h.round() as i32);
-            if self.configured_sizes.get(&layout.id) == Some(&size) {
-                continue;
+        let all_coords: Vec<(i32, i32)> = self.grid.space_coords().collect();
+        for coord in all_coords {
+            let layouts = match self.grid.space(coord) {
+                Some(space) => space.layout(viewport, gap),
+                None => continue,
+            };
+            for layout in layouts {
+                let Some(surface) = self.windows.get(&layout.id) else { continue };
+                let size = (layout.rect.w.round() as i32, layout.rect.h.round() as i32);
+                if self.configured_sizes.get(&layout.id) == Some(&size) {
+                    continue;
+                }
+                surface.with_pending_state(|state| {
+                    state.size = Some(SmithaySize::from(size));
+                });
+                surface.send_configure();
+                self.configured_sizes.insert(layout.id, size);
             }
-            surface.with_pending_state(|state| {
-                state.size = Some(SmithaySize::from(size));
-            });
-            surface.send_configure();
-            self.configured_sizes.insert(layout.id, size);
         }
     }
 
@@ -361,7 +368,7 @@ impl State {
         let target = exclusive.clone().or_else(|| self.grid.focused_window().and_then(|id| self.windows.get(&id)).map(|s| s.wl_surface().clone()));
 
         if let Some(keyboard) = self.seat.get_keyboard() {
-            keyboard.set_focus(self, target, Serial::from(0));
+            keyboard.set_focus(self, target, SERIAL_COUNTER.next_serial());
         }
         self.exclusive_keyboard_layer = exclusive;
     }
@@ -376,7 +383,7 @@ impl State {
                     let surface = id.and_then(|id| self.windows.get(&id)).map(|s| s.wl_surface().clone());
                     let info = surface.as_ref().map(window_info).unwrap_or_else(|| WindowInfo { title: String::new(), class: String::new() });
                     if let Some(keyboard) = self.seat.get_keyboard() {
-                        keyboard.set_focus(self, surface, Serial::from(0));
+                        keyboard.set_focus(self, surface, SERIAL_COUNTER.next_serial());
                     }
                     self.last_active_window = Some(info.clone());
                     self.emit_ipc_event(IpcEvent::ActiveWindow(info));
