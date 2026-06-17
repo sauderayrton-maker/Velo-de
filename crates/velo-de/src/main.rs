@@ -2,6 +2,7 @@
 //! grid of scrollable "Spaces" (see `velo-de-core`).
 
 mod backend;
+mod cursor;
 mod ipc;
 mod render;
 mod shell;

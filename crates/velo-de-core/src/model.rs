@@ -219,6 +219,9 @@ pub enum Command {
     OverviewConfirm,
     OverviewCancel,
     FocusSpaceById(i32),
+    /// Focus a specific window (e.g. from pointer click-to-focus), making
+    /// its column active in the current Space if the window lives there.
+    FocusWindowById(WindowId),
 }
 
 /// A small `f64` wrapper that is `Eq`/`Hash` so [`Command`] can derive them
@@ -476,7 +479,28 @@ impl Grid {
             Command::OverviewConfirm => self.overview_confirm(),
             Command::OverviewCancel => self.overview_cancel(),
             Command::FocusSpaceById(id) => self.focus_space_by_id(id),
+            Command::FocusWindowById(id) => self.focus_window_by_id(id),
         }
+    }
+
+    /// Make the column containing `id` active in the current Space. No-op if
+    /// the window isn't in the current Space or is already focused.
+    fn focus_window_by_id(&mut self, id: WindowId) -> Vec<Event> {
+        let viewport = self.viewport;
+        let gap = self.gap;
+        let space = self.current_space_mut();
+        for (col_idx, column) in space.strip.columns.iter().enumerate() {
+            if let Some(win_idx) = column.windows.iter().position(|&w| w == id) {
+                if space.strip.active == col_idx && column.active == win_idx {
+                    return Vec::new();
+                }
+                space.strip.active = col_idx;
+                space.strip.columns[col_idx].active = win_idx;
+                space.strip.ensure_active_visible(viewport, gap);
+                return vec![Event::FocusChanged(self.focused_window())];
+            }
+        }
+        Vec::new()
     }
 
     fn focus_column(&mut self, dir: Direction) -> Vec<Event> {
@@ -1117,6 +1141,26 @@ mod tests {
         let current = frame.iter().find(|f| f.is_current).unwrap();
         assert!((current.rect.w - 1000.0 * OVERVIEW_TILE_SCALE).abs() < 1e-6);
         assert!(current.is_overview_selection);
+    }
+
+    #[test]
+    fn focus_window_by_id_activates_its_column() {
+        let mut g = grid();
+        let a = WindowId(1);
+        let b = WindowId(2);
+        g.add_window(a);
+        g.add_window(b);
+        assert_eq!(g.focused_window(), Some(b));
+
+        let events = g.apply(Command::FocusWindowById(a));
+        assert_eq!(events, vec![Event::FocusChanged(Some(a))]);
+        assert_eq!(g.focused_window(), Some(a));
+
+        // already focused: no-op
+        assert!(g.apply(Command::FocusWindowById(a)).is_empty());
+
+        // unknown / not-in-current-space id: no-op
+        assert!(g.apply(Command::FocusWindowById(WindowId(99))).is_empty());
     }
 
     #[test]

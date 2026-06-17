@@ -5,10 +5,10 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use smithay::backend::input::{AbsolutePositionEvent, Event as _, InputEvent, KeyboardKeyEvent};
+use smithay::backend::input::{AbsolutePositionEvent, ButtonState, Event as _, InputEvent, KeyboardKeyEvent, PointerButtonEvent};
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::backend::winit::{self, WinitEvent};
-use smithay::input::pointer::MotionEvent;
+use smithay::input::pointer::{ButtonEvent, MotionEvent};
 use smithay::output::{Mode, Output, Scale as OutputScale};
 use smithay::reexports::wayland_server::{Display, ListeningSocket};
 use smithay::reexports::winit::platform::pump_events::PumpStatus;
@@ -39,7 +39,12 @@ pub fn run(display: Display<State>, config: Config, output: Output) -> Result<()
 
     let viewport = Size::new(size.w as f64, size.h as f64);
     let ipc = ipc::spawn()?;
-    let mut state = State::new(dh, config, output, viewport, ipc);
+    let mut state = State::new(dh.clone(), config, output, viewport, ipc);
+
+    // Advertise `zwp_linux_dmabuf_v1` with the renderer's supported import
+    // formats so GPU clients (Firefox, Chromium, ...) can share buffers.
+    let dmabuf_formats: Vec<_> = backend.renderer().egl_context().dmabuf_render_formats().iter().copied().collect();
+    let _dmabuf_global = state.dmabuf_state.create_global::<State>(&dh, dmabuf_formats);
 
     let listener = ListeningSocket::bind(SOCKET_NAME)?;
     std::env::set_var("WAYLAND_DISPLAY", SOCKET_NAME);
@@ -76,11 +81,7 @@ pub fn run(display: Display<State>, config: Config, output: Output) -> Result<()
                 let location = Point::from((x, y));
                 state.cursor_pos = location;
 
-                let focus = state
-                    .grid
-                    .focused_window()
-                    .and_then(|id| state.toplevel_for(id))
-                    .map(|s| (s.wl_surface().clone(), Point::from((0.0_f64, 0.0_f64))));
+                let focus = state.surface_under(location);
                 if let Some(pointer) = state.seat.get_pointer() {
                     pointer.motion(
                         &mut state,
@@ -89,6 +90,24 @@ pub fn run(display: Display<State>, config: Config, output: Output) -> Result<()
                             location,
                             serial: SERIAL_COUNTER.next_serial(),
                             time: event.time_msec(),
+                        },
+                    );
+                    pointer.frame(&mut state);
+                }
+            }
+            WinitEvent::Input(InputEvent::PointerButton { event }) => {
+                let pos = state.cursor_pos;
+                if event.state() == ButtonState::Pressed {
+                    focus_under_cursor(&mut state, pos);
+                }
+                if let Some(pointer) = state.seat.get_pointer() {
+                    pointer.button(
+                        &mut state,
+                        &ButtonEvent {
+                            serial: SERIAL_COUNTER.next_serial(),
+                            time: event.time_msec(),
+                            button: event.button_code(),
+                            state: event.state(),
                         },
                     );
                     pointer.frame(&mut state);
@@ -128,6 +147,9 @@ pub fn run(display: Display<State>, config: Config, output: Output) -> Result<()
         for (surface, _, _) in state.layer_entries() {
             send_frame_callbacks(surface.wl_surface(), time);
         }
+        for popup in state.popup_surfaces() {
+            send_frame_callbacks(popup.wl_surface(), time);
+        }
 
         let damage = Rectangle::from_size(size);
         backend.submit(Some(&[damage]))?;
@@ -137,4 +159,16 @@ pub fn run(display: Display<State>, config: Config, output: Output) -> Result<()
     }
 
     Ok(())
+}
+
+/// Click-to-focus: if the window under the cursor isn't the currently focused
+/// one, make its column active in the grid (which moves keyboard focus too).
+fn focus_under_cursor(state: &mut State, pos: Point<f64, smithay::utils::Logical>) {
+    if let Some((surface, _)) = state.surface_under(pos) {
+        if let Some(id) = state.window_id_for_wl_surface(&surface) {
+            if state.grid.focused_window() != Some(id) {
+                state.apply_command(velo_de_core::Command::FocusWindowById(id));
+            }
+        }
+    }
 }

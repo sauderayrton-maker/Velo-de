@@ -5,6 +5,8 @@
 //! mapped surface placed via [`velo_de_core::place_window`], and a software
 //! mouse cursor.
 
+use smithay::backend::allocator::Fourcc;
+use smithay::backend::renderer::element::memory::{MemoryRenderBuffer, MemoryRenderBufferRenderElement};
 use smithay::backend::renderer::element::surface::{render_elements_from_surface_tree, WaylandSurfaceRenderElement};
 use smithay::backend::renderer::element::Kind;
 use smithay::backend::renderer::gles::GlesRenderer;
@@ -94,6 +96,27 @@ pub fn render_frame(
         }
     }
 
+    // xdg-popups (menus, tooltips) render above their context. Collect at the
+    // front of the element list so they sit on top of windows and layers.
+    for popup in state.popup_surfaces() {
+        if !popup.alive() {
+            continue;
+        }
+        let screen = state.popup_screen_loc(popup);
+        let loc = Point::<i32, Physical>::from((screen.x, screen.y));
+        let popup_elements = render_elements_from_surface_tree::<_, WaylandSurfaceRenderElement<GlesRenderer>>(
+            renderer,
+            popup.wl_surface(),
+            loc,
+            Scale::from(1.0),
+            1.0,
+            Kind::Unspecified,
+        );
+        for (i, element) in popup_elements.into_iter().enumerate() {
+            elements.insert(i, element);
+        }
+    }
+
     // Collect cursor surface elements now, while renderer is not yet borrowed
     // by gpu_frame. render_elements_from_surface_tree needs &mut renderer; once
     // gpu_frame exists that borrow is held and we can't call it again.
@@ -122,6 +145,30 @@ pub fn render_frame(
         ));
     }
 
+    // No client cursor surface: build a render element from the loaded xcursor
+    // theme frame (or the built-in arrow fallback). Done before gpu_frame
+    // borrows the renderer (MemoryRenderBufferRenderElement::from_buffer needs
+    // &mut renderer for the texture upload).
+    let mut cursor_memory_element: Option<MemoryRenderBufferRenderElement<GlesRenderer>> = None;
+    if cursor_elements.is_empty() && !matches!(cursor_status, CursorImageStatus::Hidden) {
+        let time = state.start_time.elapsed().as_millis() as u32;
+        let frame = state.cursor_frames.frame_at(time);
+        let buffer = MemoryRenderBuffer::from_slice(
+            &frame.pixels,
+            // pixels are byte order R,G,B,A -> Abgr8888 (see cursor.rs).
+            Fourcc::Abgr8888,
+            (frame.width as i32, frame.height as i32),
+            1,
+            Transform::Normal,
+            None,
+        );
+        let loc = Point::<f64, Physical>::from((
+            cursor_pos.x - frame.hotspot_x as f64,
+            cursor_pos.y - frame.hotspot_y as f64,
+        ));
+        cursor_memory_element = MemoryRenderBufferRenderElement::from_buffer(renderer, loc, &buffer, None, None, None, Kind::Cursor).ok();
+    }
+
     let mut gpu_frame = renderer.render(framebuffer, output_size, transform)?;
     gpu_frame.clear(Color32F::from(theme.background.to_array()), &damage)?;
 
@@ -144,13 +191,8 @@ pub fn render_frame(
     // Draw the software cursor on top of everything else.
     if !cursor_elements.is_empty() {
         draw_render_elements(&mut gpu_frame, 1.0, &cursor_elements, &damage)?;
-    } else if !matches!(cursor_status, CursorImageStatus::Hidden) {
-        // Fallback: small accent-colored square when no client cursor surface.
-        let cursor_rect = Rectangle::new(
-            Point::from((cursor_pos.x as i32 - 5, cursor_pos.y as i32 - 5)),
-            SmithaySize::from((10, 10)),
-        );
-        gpu_frame.draw_solid(cursor_rect, &damage, Color32F::from(theme.accent.to_array()))?;
+    } else if let Some(element) = cursor_memory_element {
+        draw_render_elements(&mut gpu_frame, 1.0, std::slice::from_ref(&element), &damage)?;
     }
 
     let _ = gpu_frame.finish()?;

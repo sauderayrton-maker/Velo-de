@@ -12,7 +12,7 @@ use smithay::backend::allocator::Fourcc;
 use smithay::backend::drm::{DrmDevice, DrmDeviceFd, DrmEvent, GbmBufferedSurface};
 use smithay::backend::egl::{EGLContext, EGLDisplay};
 use smithay::backend::input::{
-    Axis as InputAxis, Event as _, InputEvent, KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent, PointerMotionEvent,
+    Axis as InputAxis, ButtonState, Event as _, InputEvent, KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent, PointerMotionEvent,
 };
 use smithay::backend::libinput::{LibinputInputBackend, LibinputSessionInterface};
 use smithay::backend::renderer::gles::GlesRenderer;
@@ -20,6 +20,7 @@ use smithay::backend::renderer::Bind;
 use smithay::backend::session::{libseat::LibSeatSession, Event as SessionEvent, Session};
 use smithay::backend::udev::{primary_gpu, UdevBackend, UdevEvent};
 use smithay::input::pointer::{AxisFrame, ButtonEvent, MotionEvent};
+use smithay::wayland::dmabuf::DmabufGlobal;
 use smithay::output::{Mode as OutputMode, Output, Scale as OutputScale};
 use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::{EventLoop, Interest, Mode as CalloopMode, PostAction};
@@ -61,6 +62,9 @@ struct CalloopData {
     listener: ListeningSocket,
     display_handle: DisplayHandle,
     last_frame: Instant,
+    /// `zwp_linux_dmabuf_v1` global; kept alive for the session.
+    #[allow(dead_code)]
+    dmabuf_global: DmabufGlobal,
 }
 
 pub fn run(display: Display<State>, config: Config, output: Output) -> Result<(), Box<dyn std::error::Error>> {
@@ -107,7 +111,7 @@ pub fn run(display: Display<State>, config: Config, output: Output) -> Result<()
 
     let drm_surface = drm.create_surface(crtc, mode, &[connector_info.handle()])?;
     let gbm_allocator = GbmAllocator::new(gbm, GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT);
-    let gbm_surface = GbmBufferedSurface::new(drm_surface, gbm_allocator, &[Fourcc::Argb8888, Fourcc::Xrgb8888], render_formats)?;
+    let gbm_surface = GbmBufferedSurface::new(drm_surface, gbm_allocator, &[Fourcc::Argb8888, Fourcc::Xrgb8888], render_formats.clone())?;
 
     // Build the real Output from the chosen DRM mode.
     let (mode_w, mode_h) = mode.size();
@@ -121,6 +125,10 @@ pub fn run(display: Display<State>, config: Config, output: Output) -> Result<()
     let viewport = Size::new(output_size.w as f64, output_size.h as f64);
     let ipc = ipc::spawn()?;
     let mut state = State::new(dh.clone(), config, output, viewport, ipc);
+
+    // Advertise `zwp_linux_dmabuf_v1` with the GPU's render formats so
+    // hardware-accelerated clients (Firefox, Chromium, ...) can share buffers.
+    let dmabuf_global = state.dmabuf_state.create_global::<State>(&dh, render_formats.iter().copied().collect::<Vec<_>>());
 
     let listener = ListeningSocket::bind(SOCKET_NAME)?;
     std::env::set_var("WAYLAND_DISPLAY", SOCKET_NAME);
@@ -148,6 +156,7 @@ pub fn run(display: Display<State>, config: Config, output: Output) -> Result<()
         display_handle: dh,
         keymap,
         last_frame: Instant::now(),
+        dmabuf_global,
         udev: UdevData { session, primary_gpu_devnum, renderer, gbm_surface, output_size, pointer_location: (0.0, 0.0).into() },
     };
 
@@ -206,13 +215,16 @@ pub fn run(display: Display<State>, config: Config, output: Output) -> Result<()
             data.state.cursor_pos = loc;
 
             if let Some(pointer) = data.state.seat.get_pointer() {
-                let focus = focused_surface(&data.state).map(|surface| (surface, Point::from((0.0, 0.0))));
+                let focus = data.state.surface_under(loc);
                 pointer.motion(&mut data.state, focus, &MotionEvent { location: loc, serial: SERIAL_COUNTER.next_serial(), time: event.time_msec() });
                 pointer.frame(&mut data.state);
             }
-            refresh_keyboard_focus(&mut data.state);
         }
         InputEvent::PointerButton { event } => {
+            let pos = data.state.cursor_pos;
+            if event.state() == ButtonState::Pressed {
+                focus_under_cursor(&mut data.state, pos);
+            }
             if let Some(pointer) = data.state.seat.get_pointer() {
                 pointer.button(&mut data.state, &ButtonEvent { serial: SERIAL_COUNTER.next_serial(), time: event.time_msec(), button: event.button_code(), state: event.state() });
                 pointer.frame(&mut data.state);
@@ -268,6 +280,18 @@ fn focused_surface(state: &State) -> Option<smithay::reexports::wayland_server::
     state.toplevel_for(id).map(|s| s.wl_surface().clone())
 }
 
+/// Click-to-focus: if the window under the cursor isn't the currently focused
+/// one, make its column active in the grid (which moves keyboard focus too).
+fn focus_under_cursor(state: &mut State, pos: Point<f64, smithay::utils::Logical>) {
+    if let Some((surface, _)) = state.surface_under(pos) {
+        if let Some(id) = state.window_id_for_wl_surface(&surface) {
+            if state.grid.focused_window() != Some(id) {
+                state.apply_command(velo_de_core::Command::FocusWindowById(id));
+            }
+        }
+    }
+}
+
 /// Point keyboard focus at the grid's current focused window. Called
 /// periodically so typing always reaches the right client even if the
 /// compositor hasn't received a pointer event recently. smithay skips
@@ -291,6 +315,9 @@ fn render(data: &mut CalloopData) -> Result<(), Box<dyn std::error::Error>> {
     }
     for (surface, _, _) in data.state.layer_entries() {
         send_frame_callbacks(surface.wl_surface(), time);
+    }
+    for popup in data.state.popup_surfaces() {
+        send_frame_callbacks(popup.wl_surface(), time);
     }
 
     let damage = Rectangle::from_size(data.udev.output_size);
