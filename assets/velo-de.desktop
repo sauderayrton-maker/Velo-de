@@ -1,6 +1,0 @@
-[Desktop Entry]
-Name=Velo
-Comment=Velo desktop environment — Spaces-grid Wayland compositor
-Exec=/usr/local/bin/velo-de
-Type=Application
-DesktopNames=velo-de
